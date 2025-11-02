@@ -467,19 +467,14 @@ Value __recurse(Board &board, int depth, Value alpha = -VALUE_INFINITE, Value be
 					break;
 			}
 
-			if (depth <= 2 && !in_check && !capt && !promo && abs(alpha) < VALUE_MATE_MAX_PLY && abs(beta) < VALUE_MATE_MAX_PLY) {
+			if (depth <= 5 && !in_check && !capt && !promo && abs(alpha) < VALUE_MATE_MAX_PLY && abs(beta) < VALUE_MATE_MAX_PLY) {
 				/**
 				 * Futility pruning
 				 * 
 				 * If we are at the leaf of the search, we can prune moves that are
 				 * probably not going to be better than alpha.
 				 */
-				if (depth == 1 && cur_eval + FUTILITY_THRESHOLD < alpha) {
-					mp.skip_quiets();
-					continue;
-				}
-
-				if (depth == 2 && cur_eval + FUTILITY_THRESHOLD2 < alpha) {
+				if (cur_eval + 300 + 200 * depth < alpha) {
 					mp.skip_quiets();
 					continue;
 				}
