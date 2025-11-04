@@ -509,7 +509,7 @@ Value __recurse(Board &board, int depth, Value alpha = -VALUE_INFINITE, Value be
 			if (move == line[ply].killer[0] || move == line[ply].killer[1])
 				r -= 1024;
 			r -= 1024 * ttpv;
-			r -= hist / 16 * !capt;
+			r -= hist / 16;
 
 			Value searched_depth = depth - r / 1024;
 
