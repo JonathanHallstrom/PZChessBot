@@ -39,6 +39,7 @@ Move MovePicker::next() {
 				if (promo)
 					score += PieceValue[move.promotion() + KNIGHT] - PawnValue;
 			} else {
+				if (qskip) continue;
 				score = QUIET_BASE + main_hist->get_history(board, move, ply, ss);
 				if (move == ss->killer[0]) score += 1500;
 				else if (move == ss->killer[1]) score += 800;
