@@ -39,7 +39,6 @@ Move MovePicker::next() {
 				if (promo)
 					score += PieceValue[move.promotion() + KNIGHT] - PawnValue;
 			} else {
-				if (qskip) continue;
 				score = QUIET_BASE + main_hist->get_history(board, move, ply, ss);
 				if (move == ss->killer[0]) score += 1500;
 				else if (move == ss->killer[1]) score += 800;
@@ -59,7 +58,7 @@ Move MovePicker::next() {
 		int best_score = -2147483647;
 		int idx = 0;
 		for (int i = 0; i < end; i++) {
-			if (board.is_capture(scores[i].first) && qskip) continue;
+			if (!board.is_capture(scores[i].first) && qskip) continue;
 			if (scores[i].second > best_score) {
 				best_score = scores[i].second;
 				best_move = scores[i].first;

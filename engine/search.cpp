@@ -1,4 +1,6 @@
 #include "search.hpp"
+#include "eval.hpp"
+#include "includes.hpp"
 
 #define MOVENUM(x) ((((#x)[1] - '1') << 12) | (((#x)[0] - 'a') << 8) | (((#x)[3] - '1') << 4) | ((#x)[2] - 'a'))
 
@@ -465,6 +467,32 @@ Value __recurse(Board &board, int depth, Value alpha = -VALUE_INFINITE, Value be
 				Value hist = main_hist.get_history(board, move, ply, &line[ply]);
 				if (hist < -HISTORY_MARGIN * depth)
 					break;
+			}
+                // var futility_value = eval +
+                //     tunables.fp_base +
+                //     @divTrunc(lmr_depth * tunables.fp_mult +
+                //         @divTrunc(history_score * tunables.fp_hist_mult, 4), 1024);
+                //
+                // if (is_pv) {
+                //     futility_value += tunables.fp_pv_base + tunables.fp_pv_mult * depth;
+                // }
+                // if (!is_in_check and
+                //     lmr_depth <= tunables.fp_depth_limit and
+                //     @abs(alpha) < 2000 and
+                //     futility_value <= alpha)
+                // {
+                //     if (!evaluation.isTBScore(best_score)) {
+                //         best_score = @intCast(@max(best_score, futility_value));
+                //     }
+                //     mp.skip_quiets = true;
+                //     continue;
+                // }
+
+			Value futility_value = tt_corr_eval +
+				300 + 200 * depth;
+			if (!pv && !in_check && !capt && depth <= 5 && abs(alpha) < 2000 && futility_value <= alpha) {
+				mp.skip_quiets();
+				continue;
 			}
 
 			if (depth <= 3 && !promo && best > -VALUE_INFINITE) {
