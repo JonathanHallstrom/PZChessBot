@@ -467,7 +467,7 @@ Value __recurse(Board &board, int depth, Value alpha = -VALUE_INFINITE, Value be
 					break;
 			}
 
-			if (depth <= 3 && !promo && best > -VALUE_INFINITE) {
+			if (!promo && best > -VALUE_INFINITE) {
 				/**
 				 * PVS SEE Pruning
 				 * 
