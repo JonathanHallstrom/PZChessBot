@@ -1,6 +1,8 @@
 #include "network.hpp"
 
 #include "incbin.h"
+#include <bit>
+#include <cstdint>
 
 extern "C" {
 	INCBIN(network_weights, NNUE_PATH);
@@ -15,7 +17,12 @@ void Network::load() {
 	memcpy(accumulator_biases, ptr, sizeof(accumulator_biases));
 	ptr += sizeof(accumulator_biases);
 
-	memcpy(l1_weights, ptr, sizeof(l1_weights));
+	for (int bucket = 0; bucket < NBUCKETS; bucket++)
+		for (int chunk = 0; chunk < L1_SIZE / 4; chunk++)
+			for (int out = 0; out < L2_SIZE; out++)
+				for (int k = 0; k < 4; k++)
+					l1_weights[bucket][chunk * L2_SIZE * 4 + out * 4 + k] = ptr[(bucket * L2_SIZE + out) * L1_SIZE + chunk * 4 + k];
+
 	ptr += sizeof(l1_weights);
 
 	memcpy(l1_biases, ptr, sizeof(l1_biases));
@@ -52,6 +59,35 @@ int calculate_index(Square sq, PieceType pt, bool side, bool perspective, int nb
 	return nbucket * INPUT_SIZE + side * 64 * 6 + pt * 64 + sq;
 }
 
+
+using u16x8 = uint16_t __attribute__((vector_size(16)));
+static constexpr auto NONZERO_INDICES = [] {
+	std::array<std::array<uint16_t, 8>, 256> table{};
+	for (int mask = 0; mask < 256; mask++) {
+		int n = 0;
+		for (int bit = 0; bit < 8; bit++)
+			if (mask & (1 << bit))
+				table[mask][n++] = bit;
+	}
+	return std::bit_cast<std::array<u16x8, 256>>(table);
+}();
+
+static int findNonZeroIndices(const uint8_t *l1, uint16_t *indices) {
+	int count = 0;
+	u16x8 base = {};
+	for (int i = 0; i < L1_SIZE; i += BYTES_PER_VEC) {
+		uint32_t mask = simd::nonzero_mask(simd::load_ivec((const ivec *)&l1[i]));
+		for (int b = 0; b < FLOATS_PER_VEC; b += 8) {
+			uint8_t byte = (mask >> b) & 0xFF;
+			u16x8 actual = NONZERO_INDICES[byte] + base;
+			memcpy(&indices[count], &actual, sizeof(actual));
+			count += arch::popcnt(byte);
+			base += 8;
+		}
+	}
+	return count;
+}
+
 int32_t nnue_eval(const Network &net, const Accumulator &stm, const Accumulator &ntm, uint8_t nbucket) {
 	const ivec zero = simd::setzero_ivec();
 	const ivec clip = simd::broadcast_i16(QA);
@@ -84,22 +120,43 @@ int32_t nnue_eval(const Network &net, const Accumulator &stm, const Accumulator 
 		simd::store_u16_u8(&l1[i + L1_SIZE / 2], ntm_pair);
 	}
 
-	for (int i = 0; i < L2_SIZE; i += L1_UNROLL) {
-		ivec sums[L1_UNROLL];
-		for (int j = 0; j < L1_UNROLL; j++)
-			sums[j] = zero;
+	constexpr int NUM_OUT_VECS = L2_SIZE / FLOATS_PER_VEC;
+	const int8_t *l1_weights = net.l1_weights[nbucket];
+	const int32_t *chunks = (const int32_t *)l1;
 
-		for (int j = 0; j < L1_SIZE; j += BYTES_PER_VEC) {
-			ivec val = simd::load_ivec((ivec *)&l1[j]);
+	uint16_t indices[L1_SIZE / 4];
+	int count = findNonZeroIndices(l1, indices);
 
-			for (int k = 0; k < L1_UNROLL; k++) {
-				ivec weight = simd::load_ivec((ivec *)&net.l1_weights[nbucket][i + k][j]);
-				sums[k] = simd::accdp_u8i8_i16(val, weight, sums[k]);
+	ivec l1_sums[NUM_OUT_VECS][L1_UNROLL] = {};
+
+	int i = 0;
+	for (; i + 2 * L1_UNROLL <= count; i += 2 * L1_UNROLL) {
+		for (int p = 0; p < L1_UNROLL; p++) {
+			int c0 = indices[i + 2 * p];
+			int c1 = indices[i + 2 * p + 1];
+			ivec in0 = simd::broadcast_i32(chunks[c0]);
+			ivec in1 = simd::broadcast_i32(chunks[c1]);
+			for (int o = 0; o < NUM_OUT_VECS; o++) {
+				ivec w0 = simd::load_ivec((const ivec *)&l1_weights[c0 * L2_SIZE * 4 + o * BYTES_PER_VEC]);
+				ivec w1 = simd::load_ivec((const ivec *)&l1_weights[c1 * L2_SIZE * 4 + o * BYTES_PER_VEC]);
+				l1_sums[o][p] = simd::dpbusdx2(l1_sums[o][p], in0, w0, in1, w1);
 			}
 		}
+	}
+	for (; i < count; i++) {
+		int c = indices[i];
+		ivec in = simd::broadcast_i32(chunks[c]);
+		for (int o = 0; o < NUM_OUT_VECS; o++) {
+			ivec weight = simd::load_ivec((const ivec *)&l1_weights[c * L2_SIZE * 4 + o * BYTES_PER_VEC]);
+			l1_sums[o][0] = simd::dpbusd(l1_sums[o][0], in, weight);
+		}
+	}
 
-		for (int j = 0; j < L1_UNROLL; j++)
-			l2i[i + j] = simd::reduce_add_epi16(sums[j]);
+	for (int o = 0; o < NUM_OUT_VECS; o++) {
+		ivec acc = l1_sums[o][0];
+		for (int p = 1; p < L1_UNROLL; p++)
+			acc = simd::add_i32(acc, l1_sums[o][p]);
+		simd::store_i32(&l2i[o * FLOATS_PER_VEC], acc);
 	}
 
 	// Convert l2 into a proper float array

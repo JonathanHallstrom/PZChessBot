@@ -50,6 +50,7 @@ namespace simd {
 	fvec setzero_fvec();
 
 	ivec broadcast_i16(int16_t x);
+	ivec broadcast_i32(int32_t x);
 	fvec broadcast_f32(float x);
 
 	ivec load_ivec(const ivec *p);
@@ -59,7 +60,12 @@ namespace simd {
 	fvec clamp_f32(fvec x, fvec lo, fvec hi);
 
 	ivec shift_mulhi(ivec a, ivec b);
-	ivec accdp_u8i8_i16(ivec a, ivec b, ivec c);
+
+	ivec dpbusd(ivec sum, ivec u, ivec i);
+	ivec dpbusdx2(ivec sum, ivec u0, ivec i0, ivec u1, ivec i1);
+	ivec add_i32(ivec a, ivec b);
+
+	uint32_t nonzero_mask(ivec v);
 
 	fvec cvt_i32_f32(ivec v);
 
@@ -68,8 +74,8 @@ namespace simd {
 	fvec add_f32(fvec a, fvec b);
 
 	void store_f32(float *p, fvec v);
+	void store_i32(int32_t *p, ivec v);
 
 	void store_u16_u8(uint8_t *p, ivec v);
 	float reduce_add_ps(fvec v);
-	int32_t reduce_add_epi16(ivec v);
 };
