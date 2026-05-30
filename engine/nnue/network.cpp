@@ -15,7 +15,12 @@ void Network::load() {
 	memcpy(accumulator_biases, ptr, sizeof(accumulator_biases));
 	ptr += sizeof(accumulator_biases);
 
-	memcpy(l1_weights, ptr, sizeof(l1_weights));
+	for (int bucket = 0; bucket < NBUCKETS; bucket++)
+		for (int chunk = 0; chunk < L1_SIZE / 4; chunk++)
+			for (int out = 0; out < L2_SIZE; out++)
+				for (int k = 0; k < 4; k++)
+					l1_weights[bucket][chunk * L2_SIZE * 4 + out * 4 + k] = ptr[(bucket * L2_SIZE + out) * L1_SIZE + chunk * 4 + k];
+
 	ptr += sizeof(l1_weights);
 
 	memcpy(l1_biases, ptr, sizeof(l1_biases));
@@ -84,22 +89,27 @@ int32_t nnue_eval(const Network &net, const Accumulator &stm, const Accumulator 
 		simd::store_u16_u8(&l1[i + L1_SIZE / 2], ntm_pair);
 	}
 
-	for (int i = 0; i < L2_SIZE; i += L1_UNROLL) {
-		ivec sums[L1_UNROLL];
-		for (int j = 0; j < L1_UNROLL; j++)
-			sums[j] = zero;
+	constexpr int NUM_OUT_VECS = L2_SIZE / FLOATS_PER_VEC;
+	const int8_t *l1_weights = net.l1_weights[nbucket];
+	const int32_t *chunks = (const int32_t *)l1;
 
-		for (int j = 0; j < L1_SIZE; j += BYTES_PER_VEC) {
-			ivec val = simd::load_ivec((ivec *)&l1[j]);
+	ivec l1_sums[NUM_OUT_VECS][L1_UNROLL] = {};
 
-			for (int k = 0; k < L1_UNROLL; k++) {
-				ivec weight = simd::load_ivec((ivec *)&net.l1_weights[nbucket][i + k][j]);
-				sums[k] = simd::accdp_u8i8_i16(val, weight, sums[k]);
+	for (int c = 0; c < L1_SIZE / 4; c += L1_UNROLL) {
+		for (int o = 0; o < NUM_OUT_VECS; o++) {
+			for (int u = 0; u < L1_UNROLL; u++) {
+				ivec in = simd::broadcast_i32(chunks[c + u]);
+				ivec weight = simd::load_ivec((const ivec *)&l1_weights[(c + u) * L2_SIZE * 4 + o * BYTES_PER_VEC]);
+				l1_sums[o][u] = simd::dpbusd(l1_sums[o][u], in, weight);
 			}
 		}
+	}
 
-		for (int j = 0; j < L1_UNROLL; j++)
-			l2i[i + j] = simd::reduce_add_epi16(sums[j]);
+	for (int o = 0; o < NUM_OUT_VECS; o++) {
+		ivec acc = l1_sums[o][0];
+		for (int u = 1; u < L1_UNROLL; u++)
+			acc = simd::add_i32(acc, l1_sums[o][u]);
+		simd::store_i32(&l2i[o * FLOATS_PER_VEC], acc);
 	}
 
 	// Convert l2 into a proper float array
